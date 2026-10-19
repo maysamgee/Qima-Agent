@@ -1,0 +1,31 @@
+sequenceDiagram
+    autonumber
+    actor User as Human reviewer
+    participant UI as React browser
+    participant API as FastAPI business services
+    participant DB as PostgreSQL
+    participant M as Model service
+    participant P as Mock email / manual record
+    User->>UI: Review candidate and approve outreach eligibility
+    UI->>API: POST /api/candidates/{id}/review
+    API->>DB: Authorize reviewer; save review and audit
+    UI->>API: POST /api/candidates/{id}/drafts
+    API->>DB: Read candidate and evidence; check eligibility
+    API->>M: Generate draft for selected objective
+    M-->>API: Structured draft and evidence IDs
+    API->>DB: Validate references; save draft version and audit
+    API-->>UI: Return draft for editing
+    opt Reviewer edits draft
+        UI->>API: PATCH /api/drafts/{draft_id}
+        API->>DB: Increment version; invalidate previous approval
+    end
+    User->>UI: Approve current version
+    UI->>API: POST /api/drafts/{draft_id}/approve
+    API->>DB: Store approval for exact draft version
+    User->>UI: Send simulated email / record manual Instagram send
+    UI->>API: POST /api/drafts/{draft_id}/send or /record-manual-send
+    API->>DB: Lock records; recheck role, approval, version and contact rules
+    API->>P: Simulate email or record manual action
+    P-->>API: Stable provider reference
+    API->>DB: Save message, thread state and audit; commit
+    API-->>UI: Recorded result

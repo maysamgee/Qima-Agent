@@ -1,0 +1,4 @@
+region       = "eu-west-1"
+owner        = "your-team"
+cost_center  = ""
+alarm_actions = [] # Add an approved SNS topic ARN to receive notifications.

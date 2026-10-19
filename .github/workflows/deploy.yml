@@ -1,0 +1,70 @@
+name: Reviewed deployment
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        required: true
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Build immutable release images
+        env:
+          API_REPOSITORY: ${{ vars.API_ECR_REPOSITORY }}
+          WORKER_REPOSITORY: ${{ vars.WORKER_ECR_REPOSITORY }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          docker build -f backend/Dockerfile -t "$API_REPOSITORY:$RELEASE_SHA" .
+          docker build -f worker/Dockerfile -t "$WORKER_REPOSITORY:$RELEASE_SHA" .
+          docker push "$API_REPOSITORY:$RELEASE_SHA"
+          docker push "$WORKER_REPOSITORY:$RELEASE_SHA"
+      - name: Register release tasks, migrate, and deploy
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          API_SERVICE: ${{ vars.API_SERVICE }}
+          WORKER_SERVICE: ${{ vars.WORKER_SERVICE }}
+          API_TASK_FAMILY: ${{ vars.API_TASK_FAMILY }}
+          WORKER_TASK_FAMILY: ${{ vars.WORKER_TASK_FAMILY }}
+          API_REPOSITORY: ${{ vars.API_ECR_REPOSITORY }}
+          WORKER_REPOSITORY: ${{ vars.WORKER_ECR_REPOSITORY }}
+          ECS_PRIVATE_SUBNETS: ${{ vars.ECS_PRIVATE_SUBNETS }}
+          ECS_SECURITY_GROUP: ${{ vars.ECS_SECURITY_GROUP }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: bash scripts/deploy-ecs.sh
+      - name: Build and publish frontend
+        env:
+          VITE_API_URL: ${{ vars.API_URL }}
+          VITE_COGNITO_DOMAIN: ${{ vars.COGNITO_DOMAIN }}
+          VITE_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET }}
+          CLOUDFRONT_ID: ${{ vars.CLOUDFRONT_ID }}
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          aws s3 sync frontend/dist/ "s3://$FRONTEND_BUCKET/" --exclude index.html --cache-control 'public,max-age=31536000,immutable'
+          aws s3 cp frontend/dist/index.html "s3://$FRONTEND_BUCKET/index.html" --cache-control 'no-cache'
+          aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_ID" --paths '/' '/index.html'

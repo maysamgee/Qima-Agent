@@ -1,0 +1,80 @@
+name: Verify
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install -e './backend[dev]'
+      - run: ruff check app tests ../worker
+        working-directory: backend
+      - run: mypy app ../worker/app
+        working-directory: backend
+      - run: pytest --junitxml=pytest-results.xml
+        working-directory: backend
+      - run: pip-audit --skip-editable
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24', cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint && npm test && npm run build && npm audit --audit-level=moderate
+        working-directory: frontend
+  terraform:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { directory: [infra/bootstrap, infra/environments/dev, infra/environments/prod] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: '1.12.2' }
+      - run: terraform fmt -check -recursive infra
+      - run: terraform init -backend=false -input=false && terraform validate
+        working-directory: ${{ matrix.directory }}
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: qima, POSTGRES_PASSWORD: qima, POSTGRES_DB: qima_agents }
+        ports: ['5432:5432']
+        options: --health-cmd 'pg_isready -U qima' --health-interval 5s --health-timeout 5s --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: pip install -e './backend[dev]'
+      - run: alembic upgrade head && python -m app.seed
+        working-directory: backend
+      - run: python scripts/postgres-recovery.py
+      - run: npm ci && npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
+          python -m worker.app.main > worker.log 2>&1 &
+          npm --prefix frontend run dev > frontend.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health/ready && curl -fsS http://localhost:5173/ >/dev/null; then break; fi
+            sleep 2
+          done
+          npm --prefix frontend run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: integration-failure, path: 'frontend/test-results/' }
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f backend/Dockerfile -t qima-api:test . && docker build -f worker/Dockerfile -t qima-worker:test .

@@ -1,0 +1,41 @@
+name: qima-agents
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qima
+      POSTGRES_PASSWORD: qima
+      POSTGRES_DB: qima_agents
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qima -d qima_agents"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://qima:qima@postgres:5432/qima_agents
+      LOCAL_STORAGE_PATH: /data/documents
+    ports: ["127.0.0.1:8000:8000"]
+    volumes: ["documents:/data/documents"]
+    depends_on:
+      postgres: {condition: service_healthy}
+  worker:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://qima:qima@postgres:5432/qima_agents
+    depends_on:
+      postgres: {condition: service_healthy}
+volumes:
+  postgres_data:
+  documents:

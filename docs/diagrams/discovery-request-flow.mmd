@@ -1,0 +1,37 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as React browser
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant W as Worker
+    participant R as Selected agent + runtime
+    participant M as Model service
+    participant T as Discovery tools
+    User->>UI: Select buyers/suppliers and submit query
+    UI->>API: POST /api/jobs + agent_type + Idempotency-Key
+    API->>API: Validate input and authorize selected objective
+    API->>DB: Create job, steps, outbox and audit in one request transaction
+    API-->>UI: 201 Created + job ID + QUEUED
+    W->>DB: Publish pending outbox; poll runnable jobs
+    W->>DB: Acquire per-job advisory lock; mark RUNNING
+    loop For each incomplete research step
+        W->>R: Execute step for selected objective
+        R->>M: Plan / structured extraction / classification as needed
+        M-->>R: Validated structured output
+        opt Runtime requests an allowed tool
+            R->>T: Bounded call with timeout and deduplication
+            T-->>R: Evidence or explicit unavailable status
+        end
+        R-->>W: Structured result and source references
+        W->>DB: Commit checkpoint, heartbeat and audit
+    end
+    W->>DB: Deduplicate candidates; save deterministic scores
+    W->>DB: Set final job status; release advisory lock
+    loop Concurrent UI polling while job is not terminal
+        UI->>API: GET /api/jobs/{job_id} every 1.5 seconds
+        API->>DB: Read status, steps and candidates
+        DB-->>API: Persisted progress and results
+        API-->>UI: JSON response
+    end
+    UI-->>User: Evidence and scores ready for review

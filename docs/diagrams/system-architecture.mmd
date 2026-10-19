@@ -1,0 +1,15 @@
+flowchart TB
+    User["User / human reviewer"] --> UI["React + Vite browser app<br/>localhost:5173"]
+    UI -->|"HTTP JSON requests"| API["FastAPI - localhost:8000<br/>Authentication, roles and business rules"]
+    API -->|"JSON responses; discovery returns job ID"| UI
+    API <-->|"SQL transactions"| DB[("PostgreSQL 16 - localhost:5432<br/>Jobs, outbox, checkpoints, evidence,<br/>scores, drafts, approvals and audit")]
+    API <-->|"Upload / download"| Files["Local document storage"]
+    API -->|"Approved version only"| Send["Mock email / manual Instagram record"]
+    API <-->|"Drafts, replies and text offer extraction"| Model["Mock model service"]
+    Worker["Separate Python worker<br/>2-second sleep between polling ticks"] <-->|"Poll jobs and due follow-ups;<br/>save progress and results"| DB
+    Worker --> Runtime["LeadAgent OR SourcingAgent<br/>Checkpointed workflow + bounded tool runtime"]
+    Runtime <-->|"Plan, extract and classify"| Model
+    Runtime <-->|"Allowlisted tools"| Tools["Discovery tools<br/>Mock search and demo evidence;<br/>safe website fetch adapter"]
+    Worker --> Score["Deterministic scoring<br/>Versioned policy + evidence"]
+    Score -->|"Scores and evidence references"| DB
+    UI -.->|"Poll job detail every 1.5 seconds"| API

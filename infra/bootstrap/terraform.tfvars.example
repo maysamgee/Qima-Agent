@@ -1,0 +1,3 @@
+region            = "eu-west-1"
+state_bucket_name = "REPLACE_WITH_GLOBALLY_UNIQUE_STATE_BUCKET"
+owner             = "your-team"
